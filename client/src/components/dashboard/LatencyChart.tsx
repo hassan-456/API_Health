@@ -16,18 +16,20 @@ interface LatencyChartProps {
   stats: DashboardStats;
 }
 
+const RANGE_HOURS = { '1h': 1, '6h': 6, '24h': 24 } as const;
+
 export const LatencyChart: React.FC<LatencyChartProps> = ({ stats }) => {
   const [range, setRange] = useState<'1h' | '6h' | '24h'>('24h');
 
-  // Multipliers or data adjusters based on range
-  const chartData = stats.latencyTrend || [
-    { time: '00:00', avgLatency: 120, threshold: 300 },
-    { time: '04:00', avgLatency: 145, threshold: 300 },
-    { time: '08:00', avgLatency: 190, threshold: 300 },
-    { time: '12:00', avgLatency: 285, threshold: 300 },
-    { time: '16:00', avgLatency: 210, threshold: 300 },
-    { time: '20:00', avgLatency: stats.avgResponseTime || 160, threshold: 300 },
-  ];
+  const chartData = (stats.latencyTrend ?? []).filter((point) => {
+    if (!point.at) return true;
+    const ageMs = Date.now() - new Date(point.at).getTime();
+    return ageMs <= RANGE_HOURS[range] * 60 * 60 * 1000;
+  });
+
+  const sla = chartData[0]?.threshold ?? 300;
+  const peak = Math.max(sla, ...chartData.map((point) => point.avgLatency), 0);
+  const yMax = Math.max(100, Math.ceil((peak * 1.25) / 50) * 50);
 
   return (
     <div className="glass-panel rounded-xl p-5 border border-slate-200">
@@ -42,7 +44,7 @@ export const LatencyChart: React.FC<LatencyChartProps> = ({ stats }) => {
             </span>
           </div>
           <p className="text-xs text-slate-500 mt-1">
-            Global average latency response curve vs 300ms SLA target
+            Recorded response times vs the {sla}ms SLA target
           </p>
         </div>
 
@@ -67,8 +69,13 @@ export const LatencyChart: React.FC<LatencyChartProps> = ({ stats }) => {
 
       {/* Chart container */}
       <div className="h-64 w-full">
+        {chartData.length === 0 ? (
+          <div className="h-full flex items-center justify-center text-sm text-slate-500">
+            No health checks in the last {range}.
+          </div>
+        ) : (
         <ResponsiveContainer width="100%" height="100%">
-          <AreaChart data={chartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+          <AreaChart data={chartData} margin={{ top: 24, right: 16, left: 8, bottom: 0 }}>
             <defs>
               <linearGradient id="latencyGradient" x1="0" y1="0" x2="0" y2="1">
                 <stop offset="5%" stopColor="#6366f1" stopOpacity={0.4} />
@@ -86,8 +93,11 @@ export const LatencyChart: React.FC<LatencyChartProps> = ({ stats }) => {
             <YAxis
               stroke="#64748b"
               fontSize={11}
+              width={64}
               tickLine={false}
               axisLine={false}
+              domain={[0, yMax]}
+              allowDecimals={false}
               tickFormatter={(v) => `${v}ms`}
             />
             <Tooltip
@@ -114,14 +124,14 @@ export const LatencyChart: React.FC<LatencyChartProps> = ({ stats }) => {
               }}
             />
             <ReferenceLine
-              y={300}
+              y={sla}
               stroke="#f43f5e"
               strokeDasharray="4 4"
               label={{
-                value: '300ms SLA Alert Line',
+                value: `${sla}ms SLA`,
                 fill: '#f43f5e',
                 fontSize: 10,
-                position: 'top',
+                position: 'insideTopRight',
               }}
             />
             <Area
@@ -131,9 +141,12 @@ export const LatencyChart: React.FC<LatencyChartProps> = ({ stats }) => {
               strokeWidth={2.5}
               fillOpacity={1}
               fill="url(#latencyGradient)"
+              dot={{ r: 4, stroke: '#6366f1', strokeWidth: 2, fill: '#ffffff' }}
+              activeDot={{ r: 6 }}
             />
           </AreaChart>
         </ResponsiveContainer>
+        )}
       </div>
 
       <div className="flex items-center justify-between mt-3 text-xs text-slate-500 pt-3 border-t border-slate-200">

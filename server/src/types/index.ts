@@ -11,6 +11,7 @@ export interface IApiEndpoint {
   isActive: boolean;
   createdAt: Date;
   updatedAt: Date;
+  lastCheck?: IHealthCheck;
 }
 
 export interface IHealthCheck {
@@ -74,6 +75,19 @@ export interface HealthCheckResult {
   error?: string;
 }
 
+export interface DashboardRecentCheck extends IHealthCheck {
+  apiName: string;
+  method: HttpMethod;
+  endpointUrl: string;
+}
+
+export interface LatencyTrendPoint {
+  time: string;
+  at: string;
+  avgLatency: number;
+  threshold: number;
+}
+
 export interface DashboardData {
   totalApis: number;
   activeApis: number;
@@ -82,7 +96,9 @@ export interface DashboardData {
   slowApis: number;
   failedApis: number;
   avgResponseTime: number;
-  recentChecks: IHealthCheck[];
+  uptimePercentage: number;
+  recentChecks: DashboardRecentCheck[];
+  latencyTrend: LatencyTrendPoint[];
   openIncidents: number;
   recentIncidents: IIncident[];
 }

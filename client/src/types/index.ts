@@ -42,6 +42,7 @@ export interface DashboardStats {
   recentChecks: RecentCheckWithEndpoint[];
   latencyTrend: {
     time: string;
+    at?: string;
     avgLatency: number;
     threshold: number;
   }[];

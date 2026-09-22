@@ -1,6 +1,6 @@
 import ApiEndpoint from '../models/ApiEndpoint';
 import HealthCheck from '../models/HealthCheck';
-import { DashboardData, IHealthCheck } from '../types';
+import { DashboardData, DashboardRecentCheck, LatencyTrendPoint } from '../types';
 import { incidentService } from './incident.service';
 
 export class DashboardService {
@@ -68,18 +68,53 @@ export class DashboardService {
         ? Math.round(totalResponseTime / responseTimeCount)
         : 0;
 
-    // Recent checks (last 20)
-    const recentChecks = await HealthCheck.find()
-      .sort({ timestamp: -1 })
-      .limit(20)
-      .populate('apiId', 'name url method threshold')
-      .lean();
+    const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
 
-    // Incident summary
-    const [openIncidents, recentIncidents] = await Promise.all([
-      incidentService.countOpen(),
-      incidentService.getRecent(5),
-    ]);
+    const [rawRecentChecks, openIncidents, recentIncidents, checksInWindow, successfulChecks, trendChecks] =
+      await Promise.all([
+        HealthCheck.find()
+          .sort({ timestamp: -1 })
+          .limit(20)
+          .populate('apiId', 'name url method threshold')
+          .lean(),
+        incidentService.countOpen(),
+        incidentService.getRecent(5),
+        HealthCheck.countDocuments({ timestamp: { $gte: since } }),
+        HealthCheck.countDocuments({ timestamp: { $gte: since }, success: true }),
+        HealthCheck.find({ timestamp: { $gte: dayAgo } })
+          .select('timestamp responseTime')
+          .lean(),
+      ]);
+
+    const recentChecks: DashboardRecentCheck[] = rawRecentChecks.map((check) => {
+      const api = check.apiId as unknown as {
+        _id?: unknown;
+        name?: string;
+        url?: string;
+        method?: DashboardRecentCheck['method'];
+      } | string;
+      const populated = typeof api === 'object' && api !== null;
+
+      return {
+        ...check,
+        apiId: (populated ? api._id : api) as DashboardRecentCheck['apiId'],
+        apiName: populated ? api.name || 'Unknown API' : 'Unknown API',
+        method: populated ? api.method || 'GET' : 'GET',
+        endpointUrl: populated ? api.url || '' : '',
+      };
+    });
+
+    const thresholdValues = endpoints.map((endpoint) => endpoint.threshold).filter((value) => value > 0);
+    const slaThreshold =
+      thresholdValues.length > 0
+        ? Math.round(thresholdValues.reduce((sum, value) => sum + value, 0) / thresholdValues.length)
+        : 300;
+
+    const uptimePercentage =
+      checksInWindow === 0
+        ? 100
+        : Math.round((successfulChecks / checksInWindow) * 1000) / 10;
 
     return {
       totalApis,
@@ -89,11 +124,45 @@ export class DashboardService {
       slowApis,
       failedApis,
       avgResponseTime,
-      recentChecks: recentChecks as IHealthCheck[],
+      uptimePercentage,
+      recentChecks,
+      latencyTrend: buildLatencyTrend(trendChecks, slaThreshold),
       openIncidents,
       recentIncidents,
     };
   }
+}
+
+function buildLatencyTrend(
+  checks: { timestamp?: Date; responseTime?: number }[],
+  threshold: number
+): LatencyTrendPoint[] {
+  const points = checks
+    .filter((check) => check.timestamp != null && check.responseTime != null)
+    .map((check) => ({
+      at: new Date(check.timestamp as Date).toISOString(),
+      date: new Date(check.timestamp as Date),
+      avgLatency: Math.round(check.responseTime as number),
+    }))
+    .sort((a, b) => a.date.getTime() - b.date.getTime());
+
+  const usedLabels = new Set<string>();
+
+  return points.map((point) => {
+    const hh = String(point.date.getHours()).padStart(2, '0');
+    const mm = String(point.date.getMinutes()).padStart(2, '0');
+    const ss = String(point.date.getSeconds()).padStart(2, '0');
+    let time = `${hh}:${mm}`;
+    if (usedLabels.has(time)) time = `${hh}:${mm}:${ss}`;
+    usedLabels.add(time);
+
+    return {
+      time,
+      at: point.at,
+      avgLatency: point.avgLatency,
+      threshold,
+    };
+  });
 }
 
 export const dashboardService = new DashboardService();

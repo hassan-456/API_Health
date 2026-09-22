@@ -1,7 +1,7 @@
 import ApiEndpoint from '../models/ApiEndpoint';
 import HealthCheck from '../models/HealthCheck';
 import Incident from '../models/Incident';
-import { IApiEndpoint, CreateEndpointDto, UpdateEndpointDto, AppError } from '../types';
+import { IApiEndpoint, IHealthCheck, CreateEndpointDto, UpdateEndpointDto, AppError } from '../types';
 
 export class EndpointService {
   /**
@@ -19,11 +19,40 @@ export class EndpointService {
   }
 
   /**
+   * Attach the newest health check so the dashboard can show status.
+   */
+  private async withLastChecks<T extends { _id: unknown }>(
+    endpoints: T[]
+  ): Promise<(T & { lastCheck?: IHealthCheck })[]> {
+    if (endpoints.length === 0) return [];
+
+    const latestChecks = await HealthCheck.aggregate([
+      { $match: { apiId: { $in: endpoints.map((endpoint) => endpoint._id) } } },
+      { $sort: { timestamp: -1 } },
+      {
+        $group: {
+          _id: '$apiId',
+          latestCheck: { $first: '$$ROOT' },
+        },
+      },
+    ]);
+
+    const checkByApi = new Map<string, IHealthCheck>(
+      latestChecks.map((item) => [String(item._id), item.latestCheck as IHealthCheck])
+    );
+
+    return endpoints.map((endpoint) => ({
+      ...endpoint,
+      lastCheck: checkByApi.get(String(endpoint._id)),
+    }));
+  }
+
+  /**
    * Get all API endpoints.
    */
   async getAll(): Promise<IApiEndpoint[]> {
     const endpoints = await ApiEndpoint.find().sort({ createdAt: -1 }).lean();
-    return endpoints as IApiEndpoint[];
+    return this.withLastChecks(endpoints);
   }
 
   /**
@@ -34,7 +63,8 @@ export class EndpointService {
     if (!endpoint) {
       throw new AppError('API endpoint not found', 404);
     }
-    return endpoint as IApiEndpoint;
+    const [withCheck] = await this.withLastChecks([endpoint]);
+    return withCheck;
   }
 
   /**
